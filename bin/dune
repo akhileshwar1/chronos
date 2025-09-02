@@ -1,0 +1,4 @@
+(executable
+ (public_name chronos)
+ (name main)
+ (libraries chronos))
