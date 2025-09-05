@@ -1,2 +1,13 @@
 (library
- (name chronos))
+ (name chronos)
+ (libraries yojson uri
+  lwt.unix 
+  cohttp
+  cohttp-lwt-unix
+  conduit-lwt-unix
+  conduit-lwt
+  sexplib
+  uuidm
+  ptime
+  ppx_deriving_yojson.runtime)
+ (preprocess (pps lwt_ppx ppx_deriving_yojson)))
