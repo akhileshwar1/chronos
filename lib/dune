@@ -9,5 +9,6 @@
   sexplib
   uuidm
   ptime
+  ptime.clock.os
   ppx_deriving_yojson.runtime)
  (preprocess (pps lwt_ppx ppx_deriving_yojson)))
