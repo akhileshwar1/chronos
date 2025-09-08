@@ -14,7 +14,7 @@ type local_config = unit
 
 (* Define the candle type for this strategy *)
 type candle = {
-  timestamp : string;
+  timestamp : Ptime.t;
   open_price : float;
   high_price : float;
   low_price : float;
@@ -33,16 +33,23 @@ let initial_local_state = {
   last_side = "equal";
 }
 
+
 (* Convert JSON to candle type *)
+(*"timestamp": "2025-05-28T12:30:00+04:00"*)
 let json_to_candle (json : Yojson.Safe.t) : candle =
   let open Yojson.Safe.Util in
-  {
-    timestamp = json |> member "date" |> to_string;
-    open_price = json |> member "open" |> to_float;
-    high_price = json |> member "high" |> to_float;
-    low_price = json |> member "low" |> to_float;
-    close_price = json |> member "close" |> to_float;
-  }
+  let timestamp_str = json |> member "date" |> to_string in
+  match Ptime.of_rfc3339 timestamp_str with
+  | Ok (ptime, _, _) ->
+      {
+        timestamp = ptime;
+        open_price = json |> member "open" |> to_float;
+        high_price = json |> member "high" |> to_float;
+        low_price = json |> member "low" |> to_float;
+        close_price = json |> member "close" |> to_float;
+}
+  | Error _ ->
+      failwith ("Invalid timestamp format: " ^ timestamp_str)
 
 (* Convert JSON to event *)
 let json_to_event (json : Yojson.Safe.t) : event =
