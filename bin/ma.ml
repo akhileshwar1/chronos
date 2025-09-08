@@ -1,7 +1,6 @@
 (* ma.ml engine *)
 
 open Chronos.Ma_crossover_strategy
-open Lwt
 
 let read_csv (filename : string) : Chronos.Ma_crossover_strategy.candle list =
   let table = Csv.load filename in
@@ -26,17 +25,63 @@ let read_csv (filename : string) : Chronos.Ma_crossover_strategy.candle list =
 let process_candle
   candle 
   (current_strategy_ref : (unit, Chronos.Ma_crossover_strategy.local_state) Chronos.Strategy.t ref)
-  : Chronos.Position.pos =
+  : Chronos.Position.pos list list =
     let old_state = (!current_strategy_ref).state in
-    let%lwt new_state_after_event = Chronos.Ma_crossover_strategy.on_event old_state event in
+    let event = Chronos.Ma_crossover_strategy.Market_data_event candle in
+    let new_state_after_event = Chronos.Ma_crossover_strategy.on_event old_state event in
     current_strategy_ref := Chronos.Strategy.update_state !current_strategy_ref new_state_after_event;
 
     let orders, new_state_after_extraction = Chronos.Ma_crossover_strategy.extract_orders (!current_strategy_ref).Chronos.Strategy.state in
     current_strategy_ref := Chronos.Strategy.update_state !current_strategy_ref new_state_after_extraction;
+    List.map (fun order -> Chronos.Position.update_or_insert_position new_state_after_extraction.positions order)
+             orders
 
 let () =
+  Lwt_main.run (
+  let open Lwt.Syntax in
   let candles = read_csv "historical_data.csv" in
-  List.iter (fun c ->
-    Printf.printf "open=%.2f close=%.2f high=%.2f low=%.2f\n"
-      c.open_price c.close_price c.high_price c.low_price
-  ) candles
+  let strategy_promise =
+    let config = {
+      Chronos.Strategy.data_layer_uri = "ws://127.0.0.1:8000/candles/stream";
+      oms_layer_uri = "http://localhost:9000/order/place";
+      oms_ws_uri = "ws://localhost:8081/";
+      symbol = "RELIANCE";
+      local_config = ();
+    } in
+    let strategy = Chronos.Ma_crossover_strategy.create config in
+    Lwt.return strategy
+  in
+    let* strategy = strategy_promise in
+    let current_strategy = ref strategy in
+
+    let all_positions =
+      List.fold_left (fun acc c ->
+        let new_positions = process_candle c current_strategy in
+        acc @ (List.flatten new_positions)
+      ) [] candles
+    in
+
+    (* Open the CSV file for writing *)
+    let oc = open_out "positions.csv" in
+
+    (* Write the header *)
+    Printf.fprintf oc "timestamp,symbol,net_price,profit_loss\n";
+
+    (* Write each position to the CSV file *)
+    List.iter (fun (p : Chronos.Position.pos) ->
+      let timestamp_str = Ptime.to_rfc3339 p.opened_at in
+      let line =
+        Printf.sprintf "%s,%s,%.2f,%.2f\n"
+        timestamp_str
+        p.symbol
+        p.net_price
+        p.pnl
+      in
+      output_string oc line
+    ) all_positions;
+
+    (* Close the file *)
+    close_out oc;
+    
+    Printf.printf "Positions written to positions.csv\n";
+    Lwt.return_unit)
