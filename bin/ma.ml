@@ -25,7 +25,7 @@ let read_csv (filename : string) : Chronos.Ma_crossover_strategy.candle list =
 let process_candle
   candle 
   (current_strategy_ref : (unit, Chronos.Ma_crossover_strategy.local_state) Chronos.Strategy.t ref)
-  : Chronos.Position.pos list list Lwt.t =
+  : Chronos.Position.pos list list =
     let old_state = (!current_strategy_ref).state in
     let event = Chronos.Ma_crossover_strategy.Market_data_event candle in
     let new_state_after_event = Chronos.Ma_crossover_strategy.on_event old_state event in
@@ -37,7 +37,7 @@ let process_candle
       List.map (fun order -> Chronos.Position.update_or_insert_position new_state_after_extraction.positions order)
                orders
     in
-    Lwt.return positions
+    positions
 
 let () =
   Lwt_main.run (
@@ -57,19 +57,17 @@ let () =
     let* strategy = strategy_promise in
     let current_strategy = ref strategy in
 
-    let* all_positions =
-      Lwt_list.fold_left_s (fun acc c ->
-        let* () = Lwt_io.printlf "Processing candle: %s" (Ptime.to_rfc3339 c.timestamp) in
-        let* new_positions = process_candle c current_strategy in
-        Lwt.return (acc @ (List.flatten new_positions))
+    let all_positions =
+      List.fold_left (fun acc c ->
+        Printf.printf "Processing candle: %s" (Ptime.to_rfc3339 c.timestamp);
+        let new_positions = process_candle c current_strategy in
+        (acc @ (List.flatten new_positions))
       ) [] candles
     in
 
-    let* oc = Lwt_io.open_file ~mode:Lwt_io.Output "positions.csv" in
-    let header = "timestamp,symbol,net_price,profit_loss\n" in
-    let* () = Lwt_io.write oc header in
-
-    let* () = Lwt_list.iter_s (fun (p : Chronos.Position.pos) ->
+    let oc = open_out "positions.csv" in 
+    Printf.fprintf oc "timestamp,symbol,net_price,profit_loss\n"; 
+    List.iter (fun (p : Chronos.Position.pos) ->
       let timestamp_str = Ptime.to_rfc3339 p.opened_at in
       let line =
         Printf.sprintf "%s,%s,%.2f,%.2f\n"
@@ -78,10 +76,9 @@ let () =
         p.net_price
         p.pnl
       in
-      Lwt_io.write oc line
-    ) all_positions in
+      output_string oc line
+    ) all_positions;
     
-    let* () = Lwt_io.close oc in
-
-    Lwt_io.printl "Positions written to positions.csv"
-    )
+    close_out oc;
+    Printf.printf "Positions written to positions.csv\n"; 
+    Lwt.return_unit)
