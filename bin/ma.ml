@@ -22,10 +22,29 @@ let read_csv (filename : string) : Chronos.Ma_crossover_strategy.candle list =
         end
     | _ -> None) (* Return None for malformed CSV rows *)
 
+let process_order
+  order
+  oc
+  (current_strategy_ref : (unit, Chronos.Ma_crossover_strategy.local_state) Chronos.Strategy.t ref)
+  : unit =
+    let state = (!current_strategy_ref).state in
+    let updated_positions = Chronos.Position.update_or_insert_position state.positions order in
+    let updated_state = { state with positions = updated_positions } in
+    current_strategy_ref := Chronos.Strategy.update_state !current_strategy_ref updated_state;
+    let timestamp_str = Ptime.to_rfc3339 (Option.get order.placed_at) in
+    let line =
+      Printf.sprintf "%s,%s,%.2f\n"
+        timestamp_str
+        order.tradingsymbol
+        order.price
+    in
+      output_string oc line
+
 let process_candle
   candle 
   (current_strategy_ref : (unit, Chronos.Ma_crossover_strategy.local_state) Chronos.Strategy.t ref)
-  : Chronos.Position.pos list list =
+  oc
+  : unit =
     let old_state = (!current_strategy_ref).state in
     let event = Chronos.Ma_crossover_strategy.Market_data_event candle in
     let new_state_after_event = Chronos.Ma_crossover_strategy.on_event old_state event in
@@ -33,11 +52,7 @@ let process_candle
 
     let orders, new_state_after_extraction = Chronos.Ma_crossover_strategy.extract_orders (!current_strategy_ref).Chronos.Strategy.state in
     current_strategy_ref := Chronos.Strategy.update_state !current_strategy_ref new_state_after_extraction;
-    let positions =
-      List.map (fun order -> Chronos.Position.update_or_insert_position new_state_after_extraction.positions order)
-               orders
-    in
-    positions
+    List.iter (fun order -> process_order order  oc current_strategy_ref) orders
 
 let () =
   Lwt_main.run (
@@ -57,28 +72,9 @@ let () =
     let* strategy = strategy_promise in
     let current_strategy = ref strategy in
 
-    let all_positions =
-      List.fold_left (fun acc c ->
-        Printf.printf "Processing candle: %s" (Ptime.to_rfc3339 c.timestamp);
-        let new_positions = process_candle c current_strategy in
-        (acc @ (List.flatten new_positions))
-      ) [] candles
-    in
-
-    let oc = open_out "positions.csv" in 
+    let oc = open_out "positions.csv" in
     Printf.fprintf oc "timestamp,symbol,net_price,profit_loss\n"; 
-    List.iter (fun (p : Chronos.Position.pos) ->
-      let timestamp_str = Ptime.to_rfc3339 p.opened_at in
-      let line =
-        Printf.sprintf "%s,%s,%.2f,%.2f\n"
-        timestamp_str
-        p.symbol
-        p.net_price
-        p.pnl
-      in
-      output_string oc line
-    ) all_positions;
-    
+    List.iter (fun candle -> process_candle candle current_strategy oc) candles;
     close_out oc;
-    Printf.printf "Positions written to positions.csv\n"; 
+    Printf.printf "Positions written to positions.csv\n";
     Lwt.return_unit)

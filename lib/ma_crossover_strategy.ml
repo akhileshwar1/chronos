@@ -2,11 +2,13 @@
 
 open Strategy
 
+type last_side = High | Low | Neutral
+
 (* Local state specific to AlternateStrategy *)
 type local_state = {
   sma_5 : float list;
   sma_20: float list;
-  last_side : string;
+  last_side : last_side;
 }
 
 (* Config specific to AlternateStrategy *)
@@ -30,9 +32,8 @@ type event =
 let initial_local_state = {
   sma_5 = [];
   sma_20 = [];
-  last_side = "equal";
+  last_side = Neutral;
 }
-
 
 (* Convert JSON to candle type *)
 (*"timestamp": "2025-05-28T12:30:00+04:00"*)
@@ -74,23 +75,28 @@ let on_event (state : 'local_state Strategy.state) (event : event) : 'local_stat
   | Market_data_event candle ->
     let sma_5_list = accumulate state.local_state.sma_5 5 candle.close_price in
     let sma_20_list = accumulate state.local_state.sma_20 20 candle.close_price in
+    let sma5 = calculate_sma sma_5_list in
+    let sma20 = calculate_sma sma_20_list in
     let last_side = state.local_state.last_side in
-    let make_order side= 
-      Order.make_order
+    let make_completed_order side= 
+      Order.make_completed_order
       ~tradingsymbol:"RELIANCE"
       ~quantity:1
       ~lots:0 
       ~price: candle.close_price 
       ~side: side 
       ~strategy_name:"bb" in
+    Printf.printf "List length %.2d\n%!" (List.length sma_20_list);
     if List.length sma_5_list < 5 || List.length sma_20_list < 20 then
       {state with local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = last_side}}
-    else if last_side != "high" && (calculate_sma sma_5_list > calculate_sma sma_20_list) then
-      {state with pending_orders = make_order Order.Buy  @ state.pending_orders;
-                  local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = "high"}}
-    else if last_side != "low" && (calculate_sma sma_5_list < calculate_sma sma_20_list) then
-      {state with pending_orders = make_order Order.Sell @ state.pending_orders;
-                  local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = "low"}}
+    else if last_side != High && sma5 > sma20 then
+      (Printf.printf " Crossing UP! \n%! ";
+      {state with pending_orders = make_completed_order Order.Buy  @ state.pending_orders;
+                  local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = High}})
+    else if last_side != Low && sma5 < sma20 then
+      (Printf.printf " Crossing DOWN! \n%! ";
+      {state with pending_orders = make_completed_order Order.Sell @ state.pending_orders;
+                  local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = Low}})
     else
       state
   | Timer_tick_event _ -> 

@@ -71,6 +71,15 @@ type t = {
   strategy_name:string ->
   t list
 
+  val make_completed_order :
+    tradingsymbol:string ->
+      quantity:int ->
+        lots:int ->
+          price:float ->
+            side:side ->
+              strategy_name:string ->
+                t list
+
 
   val of_yojson : Yojson.Safe.t -> t
 

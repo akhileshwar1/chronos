@@ -153,6 +153,40 @@ let make_order
     )
   chunks
 
+(* for backtesting purposes where there is no oms *)
+let make_completed_order
+  ~(tradingsymbol : string)
+  ~(quantity : int)
+  ~(lots : int)
+  ~(price : float)
+  ~(side : side)
+  ~(strategy_name : string)
+  : t list =
+  let chunks = split_quantity quantity in
+  List.map
+    (fun q ->
+      {
+        placed_at = Some (Ptime_clock.now ());
+        executed_at = Some (Ptime_clock.now ());
+        tradingsymbol;
+        exchange = "NSE";
+        quantity = q;
+        price;
+        trigger_price = 0.0;
+        side;
+        order_type = Market;
+        product = CNC;
+        validity = DAY;
+        status = Some Pending;
+        lot = lots;
+        strategy_name;
+        filled_quantity = q;
+        filled_price = price;
+        broker_order_id = "";
+        order_id = generate_order_id ();
+      }
+    )
+  chunks
 
 let ptime_of_string (s : string) : Ptime.t option =
   match Ptime.of_rfc3339 s with
