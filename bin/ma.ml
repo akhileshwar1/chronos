@@ -26,17 +26,21 @@ let process_order
   order
   oc
   (current_strategy_ref : (unit, Chronos.Ma_crossover_strategy.local_state) Chronos.Strategy.t ref)
+  date
   : unit =
     let state = (!current_strategy_ref).state in
     let updated_positions = Chronos.Position.update_or_insert_position state.positions order in
     let updated_state = { state with positions = updated_positions } in
     current_strategy_ref := Chronos.Strategy.update_state !current_strategy_ref updated_state;
-    let timestamp_str = Ptime.to_rfc3339 (Option.get order.placed_at) in
+    let position = List.find (fun (pos : Chronos.Position.pos) -> pos.symbol == order.tradingsymbol) updated_positions in
+    let timestamp_str = Ptime.to_rfc3339 date in
     let line =
-      Printf.sprintf "%s,%s,%.2f\n"
+      Printf.sprintf "%s,%s,%.2f,%d,%.2f\n"
         timestamp_str
-        order.tradingsymbol
-        order.price
+        position.symbol
+        position.net_price
+        position.net_qty
+        position.pnl
     in
       output_string oc line
 
@@ -52,7 +56,7 @@ let process_candle
 
     let orders, new_state_after_extraction = Chronos.Ma_crossover_strategy.extract_orders (!current_strategy_ref).Chronos.Strategy.state in
     current_strategy_ref := Chronos.Strategy.update_state !current_strategy_ref new_state_after_extraction;
-    List.iter (fun order -> process_order order  oc current_strategy_ref) orders
+    List.iter (fun order -> process_order order oc current_strategy_ref candle.timestamp) orders
 
 let () =
   Lwt_main.run (

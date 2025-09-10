@@ -86,15 +86,14 @@ let on_event (state : 'local_state Strategy.state) (event : event) : 'local_stat
       ~price: candle.close_price 
       ~side: side 
       ~strategy_name:"bb" in
-    Printf.printf "List length %.2d\n%!" (List.length sma_20_list);
     if List.length sma_5_list < 5 || List.length sma_20_list < 20 then
       {state with local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = last_side}}
     else if last_side != High && sma5 > sma20 then
-      (Printf.printf " Crossing UP! \n%! ";
+      (Printf.printf " Crossing UP! %.2f, %.2f \n%! " sma5 sma20;
       {state with pending_orders = make_completed_order Order.Buy  @ state.pending_orders;
                   local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = High}})
     else if last_side != Low && sma5 < sma20 then
-      (Printf.printf " Crossing DOWN! \n%! ";
+      (Printf.printf " Crossing DOWN! %.2f, %.2f \n%! " sma5 sma20;
       {state with pending_orders = make_completed_order Order.Sell @ state.pending_orders;
                   local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = Low}})
     else
