@@ -1,84 +1,20 @@
-(* ma.ml engine *)
+(* ma.ml *)
 
-open Chronos.Ma_crossover_strategy
-
-let read_csv (filename : string) : Chronos.Ma_crossover_strategy.candle list =
-  let table = Csv.load filename in
-  (* skip header row with List.tl *)
-  table
-  |> List.tl
-  |> List.filter_map (function
-    | [date; open_; high; low; close; _] ->
-        begin match Ptime.of_rfc3339 date with
-        | Ok (ptime, _, _) ->
-            Some { timestamp = ptime;
-                   open_price = float_of_string open_;
-                   high_price = float_of_string high;
-                   low_price = float_of_string low;
-                   close_price = float_of_string close
-                 }
-        | Error _ ->
-            None (* Return None for invalid timestamps, filtering them out *)
-        end
-    | _ -> None) (* Return None for malformed CSV rows *)
-
-let process_order
-  order
-  oc
-  (current_strategy_ref : (unit, Chronos.Ma_crossover_strategy.local_state) Chronos.Strategy.t ref)
-  date
-  : unit =
-    let state = (!current_strategy_ref).state in
-    let updated_positions = Chronos.Position.update_or_insert_position state.positions order in
-    let updated_state = { state with positions = updated_positions } in
-    current_strategy_ref := Chronos.Strategy.update_state !current_strategy_ref updated_state;
-    let position = List.find (fun (pos : Chronos.Position.pos) -> pos.symbol == order.tradingsymbol) updated_positions in
-    let timestamp_str = Ptime.to_rfc3339 date in
-    let line =
-      Printf.sprintf "%s,%s,%.2f,%d,%.2f\n"
-        timestamp_str
-        position.symbol
-        position.net_price
-        position.net_qty
-        position.pnl
-    in
-      output_string oc line
-
-let process_candle
-  candle 
-  (current_strategy_ref : (unit, Chronos.Ma_crossover_strategy.local_state) Chronos.Strategy.t ref)
-  oc
-  : unit =
-    let old_state = (!current_strategy_ref).state in
-    let event = Chronos.Ma_crossover_strategy.Market_data_event candle in
-    let new_state_after_event = Chronos.Ma_crossover_strategy.on_event old_state event in
-    current_strategy_ref := Chronos.Strategy.update_state !current_strategy_ref new_state_after_event;
-
-    let orders, new_state_after_extraction = Chronos.Ma_crossover_strategy.extract_orders (!current_strategy_ref).Chronos.Strategy.state in
-    current_strategy_ref := Chronos.Strategy.update_state !current_strategy_ref new_state_after_extraction;
-    List.iter (fun order -> process_order order oc current_strategy_ref candle.timestamp) orders
+open Chronos
+(* open Chronos_core.Strategy *)
+open Lwt
+open Lwt.Syntax
+open Chronos.Ma_crossover_strategy.Ma_crossover_strategy
 
 let () =
   Lwt_main.run (
-    let open Lwt.Syntax in
-    let candles = read_csv "historical_data.csv" in
-    let strategy_promise =
-      let config = {
-        Chronos.Strategy.data_layer_uri = "ws://127.0.0.1:8000/candles/stream";
-        oms_layer_uri = "http://localhost:9000/order/place";
-        oms_ws_uri = "ws://localhost:8081/";
-        symbol = "RELIANCE";
-        local_config = ();
-      } in
-      let strategy = Chronos.Ma_crossover_strategy.create config in
-      Lwt.return strategy
-    in
-    let* strategy = strategy_promise in
-    let current_strategy = ref strategy in
-
-    let oc = open_out "positions.csv" in
-    Printf.fprintf oc "timestamp,symbol,net_price,profit_loss\n"; 
-    List.iter (fun candle -> process_candle candle current_strategy oc) candles;
-    close_out oc;
-    Printf.printf "Positions written to positions.csv\n";
-    Lwt.return_unit)
+    let filename = "historical_data.csv" in
+    let config : (Chronos.Ma_crossover_strategy.Ma_crossover_strategy.local_config, 'local_state) Chronos_core.Strategy.config = {
+      Chronos_core.Strategy.data_layer_uri = "ws://127.0.0.1:8000/candles/stream";
+      oms_layer_uri = "http://localhost:9000/order/place";
+      oms_ws_uri = "ws://localhost:8081/";
+      symbol = "RELIANCE";
+      local_config = ( () : local_config );
+    } in
+    Backtesting_engine.run filename config
+)

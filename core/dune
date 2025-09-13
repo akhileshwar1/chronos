@@ -1,0 +1,13 @@
+(library
+ (name chronos_core)
+ (libraries ptime csv yojson
+            lwt.unix 
+            cohttp
+            cohttp-lwt-unix
+            conduit-lwt-unix
+            conduit-lwt
+            sexplib
+            uuidm
+            ptime.clock.os
+            ppx_deriving_yojson.runtime)
+ (preprocess (pps lwt_ppx ppx_deriving_yojson)))

@@ -2,5 +2,7 @@
  (public_name chronos)
  (name ma)
  (libraries chronos
+            chronos_core
             ptime
-            csv))
+            csv)
+ (flags (:standard -w -33)))

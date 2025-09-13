@@ -1,6 +1,6 @@
 (library
  (name chronos)
- (libraries yojson uri
+ (libraries chronos_core yojson uri
   lwt.unix 
   cohttp
   cohttp-lwt-unix
@@ -11,4 +11,6 @@
   ptime
   ptime.clock.os
   ppx_deriving_yojson.runtime)
+ (modules backtesting_engine_functor ma_crossover_strategy backtesting_engine strategy_sig)
+ (modules_without_implementation strategy_sig)
  (preprocess (pps lwt_ppx ppx_deriving_yojson)))
