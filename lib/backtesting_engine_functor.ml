@@ -45,7 +45,7 @@ module Backtesting_engine_functor (S : S) = struct
     let current_strategy = ref strategy in
 
     let oc = open_out "positions.csv" in
-    Printf.fprintf oc "timestamp,symbol,net_price,profit_loss\n";
+    Printf.fprintf oc "timestamp,symbol,net_price,net_qty,profit_loss\n";
     List.iter (fun event -> process_event oc current_strategy event) events;
     close_out oc;
     Printf.printf "Positions written to positions.csv\n";
