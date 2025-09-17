@@ -1,6 +1,6 @@
 (* generic code to be used by strategies *)
 
-type ('local_config, 'local_state) config = {
+type ('local_config ) config = {
   data_layer_uri : string;
   oms_layer_uri : string;
   symbol : string;
@@ -18,13 +18,13 @@ type 'local_state state = {
 }
 
 type ('local_config, 'local_state) t = {
-  config : ('local_config, 'local_state) config;
+  config : ('local_config ) config;
   state : 'local_state state;
   extract_orders : 'local_state state -> Order.t list * 'local_state state;
 }
 
 let create
-  (config : ('local_config, 'local_state) config)
+  (config : ('local_config ) config)
   (initial_local_state : 'local_state)
   (extract_orders : 'local_state state -> Order.t list * 'local_state state)
   : ('local_config, 'local_state) t =

@@ -9,7 +9,7 @@ module Backtesting_engine_functor (S : S) = struct
     |> List.tl
     |> List.filter_map S.read_row
 
-  let process_order (oc : out_channel) (current_strategy_ref : (S.local_config, S.local_state) Chronos_core.Strategy.t ref) (order : Chronos_core.Order.t) (event : S.event) : unit =
+  let process_order (oc : out_channel) (current_strategy_ref : ('local_config, 'local_state) Chronos_core.Strategy.t ref) (order : Chronos_core.Order.t) (event : S.event) : unit =
     let state = (!current_strategy_ref).state in
     let updated_positions = Chronos_core.Position.update_or_insert_position state.positions order in
     let updated_state = { state with positions = updated_positions } in
@@ -30,7 +30,7 @@ module Backtesting_engine_functor (S : S) = struct
     output_string oc line
     | None -> ()
 
-  let process_event (oc : out_channel) (current_strategy_ref : (S.local_config, S.local_state) Chronos_core.Strategy.t ref) (event : S.event) : unit =
+  let process_event (oc : out_channel) (current_strategy_ref : ('local_config, 'local_state) Chronos_core.Strategy.t ref) (event : S.event) : unit =
     let old_state = (!current_strategy_ref).state in
     let new_state_after_event = S.on_event old_state event in
     current_strategy_ref := Chronos_core.Strategy.update_state !current_strategy_ref new_state_after_event;
@@ -39,9 +39,9 @@ module Backtesting_engine_functor (S : S) = struct
     current_strategy_ref := Chronos_core.Strategy.update_state !current_strategy_ref new_state_after_extraction;
     List.iter (fun order -> process_order oc current_strategy_ref order event) orders
 
-  let run (filename : string) (config : ('local_config, 'local_state) Chronos_core.Strategy.config) : unit Lwt.t =
+  let run (filename : string) (config : ('local_config ) Chronos_core.Strategy.config) (local_state : 'local_state) : unit Lwt.t =
     let events = read_csv filename in
-    let strategy = S.create config in
+    let strategy = S.create config local_state in
     let current_strategy = ref strategy in
 
     let oc = open_out "positions.csv" in

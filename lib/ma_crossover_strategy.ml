@@ -8,11 +8,64 @@ module Ma_crossover_strategy : S = struct
   (* Local state specific to AlternateStrategy *)
   type local_state = {
     sma_5 : float list;
-  sma_20: float list;
-  last_side : last_side;
+    sma_20: float list;
+    last_side : last_side;
+    fast : int;
+    slow : int;
+    qty : int;
   }
 
-  type local_config = unit 
+  type local_config = unit
+
+  let default_local_state = {
+    sma_5 = [];
+    sma_20 = [];
+    last_side = Neutral;
+    fast = 0;
+    slow = 0;
+    qty = 0;
+  }
+
+  (* small helpers to parse *)
+  let lookup key kvs =
+    try Some (List.assoc key kvs) with Not_found -> None
+
+    let int_of_string_result s =
+      try Ok (int_of_string s) with Failure _ -> Error ("invalid int: " ^ s)
+
+      (* validator *)
+  let validate_params ~fast ~slow =
+    if fast < 1 || slow < 1 then Error "fast and slow must be >= 1"
+    else if fast >= slow then Error "fast must be < slow"
+    else Ok ()
+
+  (* Build local_state from kv list *)
+let local_state_of_kv kvs =
+  (* recommended keys *)
+  let open Result in
+  let fast_s = lookup "fast" kvs in
+  let slow_s = lookup "slow" kvs in
+  let qty_s  = lookup "qty" kvs in
+
+  (* apply defaults if missing *)
+  let fast_str = match fast_s with Some v -> v | None -> string_of_int default_local_state.fast in
+  let slow_str = match slow_s with Some v -> v | None -> string_of_int default_local_state.slow in
+  let qty_str  = match qty_s  with Some v -> v | None -> string_of_int default_local_state.qty in
+
+  match int_of_string_result fast_str with
+  | Error e -> Error ("fast parse error: " ^ e)
+  | Ok fast ->
+      match int_of_string_result slow_str with
+    | Error e -> Error ("slow parse error: " ^ e)
+    | Ok slow ->
+        match int_of_string_result qty_str with
+      | Error e -> Error ("qty parse error: " ^ e)
+      | Ok qty ->
+          (match validate_params ~fast ~slow with
+         | Error e -> Error e
+         | Ok () ->
+             Ok { default_local_state with fast; slow; qty; }
+         )
 
   (* Define the candle type for this strategy *)
   type candle = {
@@ -42,13 +95,6 @@ module Ma_crossover_strategy : S = struct
     match event with
      | Market_data_event candle -> Some candle.timestamp
 
-  (* Initialize the strategy state *)
-  let initial_local_state = {
-    sma_5 = [];
-  sma_20 = [];
-  last_side = Neutral;
-          }
-
   let calculate_sma list : float =
     match list with
     | [] -> 0.0
@@ -75,15 +121,18 @@ module Ma_crossover_strategy : S = struct
     match event with
   | Market_data_event candle ->
       Printf.printf "RAW CANDLE: close=%.5f \n%!" candle.close_price;
-      let sma_5_list = accumulate state.local_state.sma_5 5 candle.close_price in
-      let sma_20_list = accumulate state.local_state.sma_20 20 candle.close_price in
+      let fast = state.local_state.fast in
+      let slow = state.local_state.slow in
+      let qty = state.local_state.qty in
+      let sma_5_list = accumulate state.local_state.sma_5 slow candle.close_price in
+      let sma_20_list = accumulate state.local_state.sma_20 fast candle.close_price in
       let sma5 = calculate_sma sma_5_list in
       let sma20 = calculate_sma sma_20_list in
       let last_side = state.local_state.last_side in
       let make_completed_order side= 
         Order.make_completed_order
       ~tradingsymbol:"RELIANCE"
-      ~quantity:10
+      ~quantity:qty
       ~lots:0 
       ~price: candle.close_price 
       ~side: side 
@@ -91,19 +140,19 @@ module Ma_crossover_strategy : S = struct
       Printf.printf "sma5_list=%s sma20_list=%s\n%!"
        (string_of_float_list sma_5_list)
        (string_of_float_list sma_20_list);
-      if List.length sma_5_list < 5 || List.length sma_20_list < 20 then
-        {state with local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = last_side}}
+      if List.length sma_5_list < slow || List.length sma_20_list < fast then
+        {state with local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = last_side; fast = fast; slow = slow; qty = qty}}
       else if last_side <> High && sma5 > sma20 then
       (Printf.printf " Crossing UP! %.2f, %.2f \n%! " sma5 sma20;
       {state with pending_orders = make_completed_order Order.Buy  @ state.pending_orders;
-                  local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = High}})
+                  local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = High; fast = fast; slow = slow; qty = qty}})
       else if last_side <> Low && sma5 < sma20 then
         (Printf.printf " Crossing DOWN! %.2f, %.2f \n%! " sma5 sma20;
       {state with pending_orders = make_completed_order Order.Sell @ state.pending_orders;
-                  local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = Low}})
+                  local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = Low; fast = fast; slow = slow; qty = qty}})
     else
       (Printf.printf "in else \n%!";
-      {state with local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = last_side}})
+      {state with local_state = {sma_5 = sma_5_list; sma_20 = sma_20_list; last_side = last_side; fast = fast; slow = slow; qty = qty}})
 
   let extract_orders (state : 'local_state Strategy.state) : Order.t list * 'local_state Strategy.state =
     let orders_to_extract = state.pending_orders in
@@ -111,8 +160,8 @@ module Ma_crossover_strategy : S = struct
     (orders_to_extract, new_state) (* Return the orders and the new state *)
 
 (* The final strategy packaged together *)
-  let create (config : ('local_config, 'local_state) Strategy.config) : ('local_config, 'local_state) Strategy.t =  Strategy.create
+  let create (config : ('local_config ) Strategy.config) (local_state : local_state) : ('local_config, 'local_state) Strategy.t =  Strategy.create
     config
-    initial_local_state
+    local_state 
     extract_orders
 end
