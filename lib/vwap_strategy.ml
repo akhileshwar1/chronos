@@ -73,6 +73,11 @@ module Vwap_strategy : S = struct
 
     last_side : last_side;
     symbol : string;
+
+  (* balances for spot simulation *)
+    quote_balance : float;   (* USDT-like *)
+    base_balance  : float;   (* BTC-like *)
+    trade_notional: float;   (* USD notional per trade, e.g. 20.0 *)
   }
 
   let default_local_state = {
@@ -95,6 +100,10 @@ module Vwap_strategy : S = struct
     max_hold_bars = 12;  (* default 12 x 15m = 3 hours *)
     last_side = Neutral;
     symbol = "BTCUSDT";
+    (* initialize balances: $100 USDT and ~0.0011 BTC (~$100 at ~90k) *)
+    quote_balance = 100.0;
+    base_balance = 0.0011;
+    trade_notional = 20.0;
   }
 
   type local_config = unit
@@ -132,6 +141,9 @@ module Vwap_strategy : S = struct
     | Long -> Order.Sell
     | Short -> Order.Buy
 
+ (* fees: 0.1% per side *)
+  let fee_rate_one_side = 0.001 (* 0.1% *)
+
   (* ---------- Strategy_sig implementation ---------- *)
 
   let lookup key kvs =
@@ -157,10 +169,15 @@ module Vwap_strategy : S = struct
     let tp_pct = match lookup "tp_pct" kvs with Some v -> (try float_of_string v with _ -> default_local_state.tp_pct) | None -> default_local_state.tp_pct in
     let sl_pct = match lookup "sl_pct" kvs with Some v -> (try float_of_string v with _ -> default_local_state.sl_pct) | None -> default_local_state.sl_pct in
     let max_hold_bars = match lookup "max_hold_bars" kvs with Some v -> (try int_of_string v with _ -> default_local_state.max_hold_bars) | None -> default_local_state.max_hold_bars in
+
+    let init_quote = match lookup "init_quote" kvs with Some v -> (try float_of_string v with _ -> default_local_state.quote_balance) | None -> default_local_state.quote_balance in
+    let init_base  = match lookup "init_base" kvs with Some v -> (try float_of_string v with _ -> default_local_state.base_balance) | None -> default_local_state.base_balance in
+    let tnot = match lookup "trade_notional" kvs with Some v -> (try float_of_string v with _ -> default_local_state.trade_notional) | None -> default_local_state.trade_notional in
+
     match validate_params ~vol_mult ~qty ~tp_pct ~sl_pct ~max_hold_bars with
     | Error e -> Error e
     | Ok () ->
-      Ok { default_local_state with vol_mult; qty; tp_pct; sl_pct; max_hold_bars }
+      Ok { default_local_state with vol_mult; qty; tp_pct; sl_pct; max_hold_bars; quote_balance = init_quote; base_balance = init_base; trade_notional = tnot }
 
   (* CSV row -> event *)
   let read_row (row : string list) : event option =
@@ -285,16 +302,28 @@ module Vwap_strategy : S = struct
           let timeout = bars_held_now >= updated_ls.max_hold_bars in
           if tp_hit then
             let close_price = tp_price in
-            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty:tr.qty ~price:close_price (opposite_side tr.side) in
+            let gross = tr.qty *. close_price in
+            let fee = gross *. fee_rate_one_side in
+            let net_notional = gross -. fee in
+            let qty = net_notional /. candle.close in
+            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty ~price:close_price (opposite_side tr.side) in
             (* do not add trade back to open list *)
             check_exits open_trs (exit_order @ acc_orders) rest
           else if sl_hit then
             let close_price = sl_price in
-            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty:tr.qty ~price:close_price (opposite_side tr.side) in
+            let gross = tr.qty *. close_price in
+            let fee = gross *. fee_rate_one_side in
+            let net_notional = gross -. fee in
+            let qty = net_notional /. candle.close in
+            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty ~price:close_price (opposite_side tr.side) in
             check_exits open_trs (exit_order @ acc_orders) rest
           else if timeout then
             let close_price = candle.close in
-            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty:tr.qty ~price:close_price (opposite_side tr.side) in
+            let gross = tr.qty *. close_price in
+            let fee = gross *. fee_rate_one_side in
+            let net_notional = gross -. fee in
+            let qty = net_notional /. candle.close in
+            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty ~price:close_price (opposite_side tr.side) in
             check_exits open_trs (exit_order @ acc_orders) rest
           else
             (* update bars_held and keep trade open *)
@@ -313,8 +342,9 @@ module Vwap_strategy : S = struct
           (match updated_ls.ema50_1h with Some v -> Printf.sprintf "%.2f" v | None -> "None")
           (match updated_ls.vwap_1h with Some v -> Printf.sprintf "%.2f" v | None -> "None")
           candle.volume vol20_avg in
+
      (* second: detect new entry signal (only if bias present and prev_candle exists) *)
-      let entry_orders, new_open_trades =
+      let entry_orders, _=
         match updated_ls.ema20_15m, updated_ls.ema50_15m, updated_ls.ema20_1h, updated_ls.ema50_1h, updated_ls.vwap_1h, updated_ls.last_15m_candle with
         | Some ema20_15m_v , Some _ (* ema50_15m_v *), Some ema20_1h_v, Some ema50_1h_v, Some vwap_1h_v, Some prev_candle ->
           (* compute bias from 1h *)
@@ -338,13 +368,31 @@ module Vwap_strategy : S = struct
           (* let vol_ok = true in *)
           begin match bias_opt with
             | Some `Long when pullback (* && (candle.close > prev_candle.high) *) && vol_ok ->
-              (* Entry: create completed buy order and insert open_trade *)
-              let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty:updated_ls.qty ~price:candle.close Order.Buy in
-              let new_trade = { entry_time = candle.timestamp; entry_price = candle.close; side = Long; qty = updated_ls.qty; bars_held = 0 } in
-              (orders, new_trade :: remaining_open_trades)
+              (* compute required base qty from trade_notional and ensure it's convertible to int qty *)
+                let gross = updated_ls.trade_notional in
+                let fee = gross *. fee_rate_one_side in
+                let net_notional = gross -. fee in
+                let qty = net_notional /. candle.close in
+                if qty <= 0.0 then
+                  (Printf.eprintf "SKIP_ENTRY Long: qty %.8f rounds to zero \n%!" qty; ([], remaining_open_trades))
+                else if updated_ls.quote_balance < (qty *. candle.close) *. (1.0 +. fee_rate_one_side) then
+                  (Printf.eprintf "SKIP_ENTRY Long: insufficient quote balance (need %.6f got %.6f)\n%!"
+                     ((qty*. candle.close) *. (1.0 +. fee_rate_one_side)) updated_ls.quote_balance;
+                   ([], remaining_open_trades))
+                else
+                  let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty ~price:candle.close Order.Buy in
+                  let new_trade = { entry_time = candle.timestamp; entry_price = candle.close; side = Long; qty = qty; bars_held = 0 } in
+                  (orders, new_trade :: remaining_open_trades)
+
             | Some `Short when pullback (* && (candle.close < prev_candle.low) *) && vol_ok ->
-              let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty:updated_ls.qty ~price:candle.close Order.Sell in
-              let new_trade = { entry_time = candle.timestamp; entry_price = candle.close; side = Short; qty = updated_ls.qty; bars_held = 0 } in
+              (* ENTRY Short: compute qty from trade_notional minus entry fee; sell that base qty *)
+              let gross = updated_ls.trade_notional in
+              let fee = gross *. fee_rate_one_side in
+              let net_notional = gross -. fee in
+              let qty = net_notional /. candle.close in
+              Printf.eprintf "ENTRY Short: gross=%.4f fee=%.6f net_notional=%.4f price=%.2f qty=%.8f\n%!" gross fee net_notional candle.close qty;
+              let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty ~price:candle.close Order.Sell in
+              let new_trade = { entry_time = candle.timestamp; entry_price = candle.close; side = Short; qty = qty; bars_held = 0 } in
               (orders, new_trade :: remaining_open_trades)
             | _ ->
               ([], remaining_open_trades)
@@ -355,8 +403,26 @@ module Vwap_strategy : S = struct
       (* assemble pending_orders (exit orders first, then entry orders) *)
       let pending_orders = exit_orders @ entry_orders @ state.pending_orders in
 
+      (* Apply fills (simulate trade execution & fees) by folding over all orders produced 
+         NOTE: No fee calculations here because we assumed the feeling when making completed orders. *)
+      let apply_fill_to_balances ls (order : Order.t) =
+        (* If the order was created by make_completed_order, filled_quantity/fill price available *)
+        let q = order.filled_quantity in
+        let p = order.filled_price in
+        match order.side with
+        | Order.Buy ->
+          let cost = q *. p in
+          { ls with quote_balance = ls.quote_balance -. (cost); base_balance = ls.base_balance +. q }
+        | Order.Sell ->
+          let proceeds = q *. p in
+          { ls with base_balance = ls.base_balance -. q; quote_balance = ls.quote_balance +. (proceeds) }
+      in
+
+      let all_fills = exit_orders @ entry_orders in
+      let ls_after_fills = List.fold_left apply_fill_to_balances updated_ls all_fills in
+
       (* final updated local_state *)
-      let final_local_state = { updated_ls with open_trades = new_open_trades } in
+      let final_local_state = { ls_after_fills with open_trades = remaining_open_trades } in
 
       { state with pending_orders = pending_orders; local_state = final_local_state }
 
