@@ -1,6 +1,6 @@
 (executable
  (public_name chronos)
- (name ma)
+ (name vwap)
  (libraries chronos
             chronos_core
             ptime
