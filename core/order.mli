@@ -43,7 +43,7 @@ type t = {
   executed_at : Ptime.t option;
   tradingsymbol : string;
   exchange : string;
-  quantity : int;
+  quantity : float;
   price : float;
   trigger_price : float;
   side : side;
@@ -53,7 +53,7 @@ type t = {
   status : status_type option;
   strategy_name : string;
   lot : int;
-  filled_quantity : int;
+  filled_quantity : float;
   filled_price : float;
   order_id : string;
   broker_order_id : string;
@@ -64,7 +64,7 @@ type t = {
 
   val make_order :
   tradingsymbol:string ->
-  quantity:int ->
+  quantity:float ->
   lots:int ->
   price:float ->
   side:side ->
@@ -73,7 +73,7 @@ type t = {
 
   val make_completed_order :
     tradingsymbol:string ->
-      quantity:int ->
+      quantity:float ->
         lots:int ->
           price:float ->
             side:side ->

@@ -35,7 +35,7 @@ module Vwap_strategy : S = struct
     entry_time : Ptime.t;
     entry_price : float;
     side : trade_side;
-    qty : int;
+    qty : float;
     bars_held : int;  (* increments each 15m candle *)
   }
 
@@ -66,7 +66,7 @@ module Vwap_strategy : S = struct
 
     (* strategy parameters *)
     vol_mult : float;   (* e.g., 1.5 *)
-    qty : int;
+    qty : float;
     tp_pct : float;     (* e.g., 1.0 for 1% *)
     sl_pct : float;     (* e.g., 0.5 for 0.5% *)
     max_hold_bars : int;(* number of 15m bars to hold before timeout *)
@@ -88,8 +88,8 @@ module Vwap_strategy : S = struct
     ema50_1h = None;
     vwap_1h = None;
     open_trades = [];
-    vol_mult = 1.5;
-    qty = 0;
+    vol_mult = 1.0;
+    qty = 0.1;
     tp_pct = 1.0;
     sl_pct = 0.5;
     max_hold_bars = 12;  (* default 12 x 15m = 3 hours *)
@@ -145,15 +145,15 @@ module Vwap_strategy : S = struct
 
   let validate_params ~vol_mult ~qty ~tp_pct ~sl_pct ~max_hold_bars =
     if vol_mult <= 0.0 then Error "vol_mult must be > 0"
-    else if qty < 1 then Error "qty must be >= 1"
     else if tp_pct <= 0.0 then Error "tp_pct must be > 0"
+    else if qty <= 0.0 then Error "qty must be > 0"
     else if sl_pct <= 0.0 then Error "sl_pct must be > 0"
     else if max_hold_bars < 1 then Error "max_hold_bars must be >= 1"
     else Ok ()
 
   let local_state_of_kv kvs =
     let vol_mult = match lookup "vol_mult" kvs with Some v -> (try float_of_string v with _ -> default_local_state.vol_mult) | None -> default_local_state.vol_mult in
-    let qty = match lookup "qty" kvs with Some v -> (try int_of_string v with _ -> default_local_state.qty) | None -> default_local_state.qty in
+    let qty = match lookup "qty" kvs with Some v -> (try float_of_string v with _ -> default_local_state.qty) | None -> default_local_state.qty in
     let tp_pct = match lookup "tp_pct" kvs with Some v -> (try float_of_string v with _ -> default_local_state.tp_pct) | None -> default_local_state.tp_pct in
     let sl_pct = match lookup "sl_pct" kvs with Some v -> (try float_of_string v with _ -> default_local_state.sl_pct) | None -> default_local_state.sl_pct in
     let max_hold_bars = match lookup "max_hold_bars" kvs with Some v -> (try int_of_string v with _ -> default_local_state.max_hold_bars) | None -> default_local_state.max_hold_bars in
@@ -200,8 +200,11 @@ module Vwap_strategy : S = struct
   (* ---------- on_event: core logic ---------- *)
 
   let on_event (state : local_state Strategy.state) (event : event) : local_state Strategy.state =
+
     match event with
     | Market_data_event candle ->
+      (* Printf.printf "Candle is %f\n%!" candle.volume; *)
+
       (* update 15m EMAs *)
       let close = candle.close in
       let ema20_15m_v = Some (update_ema state.local_state.ema20_15m close 20) in
@@ -301,26 +304,45 @@ module Vwap_strategy : S = struct
 
       let (exit_orders, remaining_open_trades) = check_exits [] [] updated_ls.open_trades in
 
-      (* second: detect new entry signal (only if bias present and prev_candle exists) *)
+      let _ =
+        Printf.eprintf "t=%s close=%.2f ema20_15m=%s ema20_1h=%s ema50_1h=%s vwap_1h=%s vol=%.3f vol20=%.3f\n%!"
+          (Ptime.to_rfc3339 candle.timestamp)
+          candle.close
+          (match updated_ls.ema20_15m with Some v -> Printf.sprintf "%.2f" v | None -> "None")
+          (match updated_ls.ema20_1h with Some v -> Printf.sprintf "%.2f" v | None -> "None")
+          (match updated_ls.ema50_1h with Some v -> Printf.sprintf "%.2f" v | None -> "None")
+          (match updated_ls.vwap_1h with Some v -> Printf.sprintf "%.2f" v | None -> "None")
+          candle.volume vol20_avg in
+     (* second: detect new entry signal (only if bias present and prev_candle exists) *)
       let entry_orders, new_open_trades =
         match updated_ls.ema20_15m, updated_ls.ema50_15m, updated_ls.ema20_1h, updated_ls.ema50_1h, updated_ls.vwap_1h, updated_ls.last_15m_candle with
-        | Some ema20_15m_v, Some _ema50_15m_v, Some ema20_1h_v, Some ema50_1h_v, Some vwap_1h_v, Some prev_candle ->
+        | Some ema20_15m_v , Some _ (* ema50_15m_v *), Some ema20_1h_v, Some ema50_1h_v, Some vwap_1h_v, Some prev_candle ->
           (* compute bias from 1h *)
+          (* let bias_opt = *)
+          (*   if (ema20_15m_v > ema50_15m_v) then Some `Long *)
+          (*   else if (ema20_15m_v < ema50_15m_v) then Some `Short *)
+          (*   else None *)
+          (* in *)
           let bias_opt =
             if (candle.close > vwap_1h_v) && (ema20_1h_v > ema50_1h_v) then Some `Long
             else if (candle.close < vwap_1h_v) && (ema20_1h_v < ema50_1h_v) then Some `Short
-            else None
-          in
+            else None in
           (* pullback condition *)
           let pullback = (prev_candle.low <= ema20_15m_v) && (ema20_15m_v <= prev_candle.high) in
+          (* let pullback = true in *)
           let vol_ok = if vol20_avg <= 0.0 then false else (candle.volume >= updated_ls.vol_mult *. vol20_avg) in
+
+          (* let vol_ok = *)
+          (*   if vol20_avg <= 0.0 then true *)
+          (*   else candle.volume >= (max 1.0 updated_ls.vol_mult) *. vol20_avg in *)
+          (* let vol_ok = true in *)
           begin match bias_opt with
-            | Some `Long when pullback && (candle.close > prev_candle.high) && vol_ok ->
+            | Some `Long when pullback (* && (candle.close > prev_candle.high) *) && vol_ok ->
               (* Entry: create completed buy order and insert open_trade *)
               let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty:updated_ls.qty ~price:candle.close Order.Buy in
               let new_trade = { entry_time = candle.timestamp; entry_price = candle.close; side = Long; qty = updated_ls.qty; bars_held = 0 } in
               (orders, new_trade :: remaining_open_trades)
-            | Some `Short when pullback && (candle.close < prev_candle.low) && vol_ok ->
+            | Some `Short when pullback (* && (candle.close < prev_candle.low) *) && vol_ok ->
               let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty:updated_ls.qty ~price:candle.close Order.Sell in
               let new_trade = { entry_time = candle.timestamp; entry_price = candle.close; side = Short; qty = updated_ls.qty; bars_held = 0 } in
               (orders, new_trade :: remaining_open_trades)

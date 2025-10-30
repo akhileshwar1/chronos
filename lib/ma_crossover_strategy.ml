@@ -12,7 +12,7 @@ module Ma_crossover_strategy : S = struct
     last_side : last_side;
     fast : int;
     slow : int;
-    qty : int;
+    qty : float;
   }
 
   type local_config = unit
@@ -23,7 +23,7 @@ module Ma_crossover_strategy : S = struct
     last_side = Neutral;
     fast = 0;
     slow = 0;
-    qty = 0;
+    qty = 0.0;
   }
 
   (* small helpers to parse *)
@@ -32,6 +32,10 @@ module Ma_crossover_strategy : S = struct
 
     let int_of_string_result s =
       try Ok (int_of_string s) with Failure _ -> Error ("invalid int: " ^ s)
+
+    let float_of_string_result s =
+    try Ok (float_of_string s) with Failure _ -> Error ("invalid int: " ^ s)
+
 
       (* validator *)
   let validate_params ~fast ~slow =
@@ -50,7 +54,7 @@ let local_state_of_kv kvs =
   (* apply defaults if missing *)
   let fast_str = match fast_s with Some v -> v | None -> string_of_int default_local_state.fast in
   let slow_str = match slow_s with Some v -> v | None -> string_of_int default_local_state.slow in
-  let qty_str  = match qty_s  with Some v -> v | None -> string_of_int default_local_state.qty in
+  let qty_str  = match qty_s  with Some v -> v | None -> string_of_float default_local_state.qty in
 
   match int_of_string_result fast_str with
   | Error e -> Error ("fast parse error: " ^ e)
@@ -58,7 +62,7 @@ let local_state_of_kv kvs =
       match int_of_string_result slow_str with
     | Error e -> Error ("slow parse error: " ^ e)
     | Ok slow ->
-        match int_of_string_result qty_str with
+        match float_of_string_result qty_str with
       | Error e -> Error ("qty parse error: " ^ e)
       | Ok qty ->
           (match validate_params ~fast ~slow with

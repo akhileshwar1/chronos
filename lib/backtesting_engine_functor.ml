@@ -20,7 +20,7 @@ module Backtesting_engine_functor (S : S) = struct
      | Some date ->
       let timestamp_str = Ptime.to_rfc3339 date in
       let line =
-        Printf.sprintf "%s,%s,%.2f,%d,%.2f\n"
+        Printf.sprintf "%s,%s,%.2f,%f,%.2f\n"
         timestamp_str
         position.symbol
         position.net_price
