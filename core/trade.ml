@@ -72,10 +72,9 @@ let of_order ?(fee_rate_one_side=0.001) (order : Order.t) : trade =
     ttype = ttype;
   }
 
-let to_csv_line (t : trade) : string =
-  let ts = match t.ts with Some p -> Ptime.to_rfc3339 p | None -> "" in
+let to_csv_line (t : trade) (timestamp_str : string) : string =
   Printf.sprintf "%s,%s,%s,%s,%.12f,%.8f,%.8f,%.8f,%.8f,%s\n"
-    ts
+    timestamp_str
     t.symbol
     (side_to_str t.side)
     (trade_type_to_str t.ttype)
