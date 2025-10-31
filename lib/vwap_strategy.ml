@@ -301,30 +301,24 @@ module Vwap_strategy : S = struct
           let bars_held_now = tr.bars_held + 1 in
           let timeout = bars_held_now >= updated_ls.max_hold_bars in
           if tp_hit then
+            (Printf.printf "TP HIT\n%!";
             let close_price = tp_price in
-            let gross = tr.qty *. close_price in
-            let fee = gross *. fee_rate_one_side in
-            let net_notional = gross -. fee in
-            let qty = net_notional /. candle.close in
-            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty ~price:close_price (opposite_side tr.side) in
+            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty:tr.qty ~price:close_price (opposite_side tr.side)
+                               |> List.map (fun o -> { o with Order.strategy_name = "vwap_pullback:exit" }) in
             (* do not add trade back to open list *)
-            check_exits open_trs (exit_order @ acc_orders) rest
+            check_exits open_trs (exit_order @ acc_orders) rest)
           else if sl_hit then
+            (Printf.printf "SL HIT\n%!";
             let close_price = sl_price in
-            let gross = tr.qty *. close_price in
-            let fee = gross *. fee_rate_one_side in
-            let net_notional = gross -. fee in
-            let qty = net_notional /. candle.close in
-            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty ~price:close_price (opposite_side tr.side) in
-            check_exits open_trs (exit_order @ acc_orders) rest
+            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty:tr.qty ~price:close_price (opposite_side tr.side)
+                                |> List.map (fun o -> { o with Order.strategy_name = "vwap_pullback:exit" }) in
+            check_exits open_trs (exit_order @ acc_orders) rest)
           else if timeout then
+            (Printf.printf "TIMEOUT HIT\n%!";
             let close_price = candle.close in
-            let gross = tr.qty *. close_price in
-            let fee = gross *. fee_rate_one_side in
-            let net_notional = gross -. fee in
-            let qty = net_notional /. candle.close in
-            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty ~price:close_price (opposite_side tr.side) in
-            check_exits open_trs (exit_order @ acc_orders) rest
+            let exit_order = make_completed_order_for_side ~symbol:(state.local_state.symbol) ~qty:tr.qty ~price:close_price (opposite_side tr.side) 
+                               |> List.map (fun o -> { o with Order.strategy_name = "vwap_pullback:exit" }) in
+            check_exits open_trs (exit_order @ acc_orders) rest)
           else
             (* update bars_held and keep trade open *)
             let updated_trade = { tr with bars_held = bars_held_now } in
@@ -344,7 +338,7 @@ module Vwap_strategy : S = struct
           candle.volume vol20_avg in
 
      (* second: detect new entry signal (only if bias present and prev_candle exists) *)
-      let entry_orders, _=
+      let entry_orders, remaining_open_trades =
         match updated_ls.ema20_15m, updated_ls.ema50_15m, updated_ls.ema20_1h, updated_ls.ema50_1h, updated_ls.vwap_1h, updated_ls.last_15m_candle with
         | Some ema20_15m_v , Some _ (* ema50_15m_v *), Some ema20_1h_v, Some ema50_1h_v, Some vwap_1h_v, Some prev_candle ->
           (* compute bias from 1h *)
@@ -369,10 +363,7 @@ module Vwap_strategy : S = struct
           begin match bias_opt with
             | Some `Long when pullback (* && (candle.close > prev_candle.high) *) && vol_ok ->
               (* compute required base qty from trade_notional and ensure it's convertible to int qty *)
-                let gross = updated_ls.trade_notional in
-                let fee = gross *. fee_rate_one_side in
-                let net_notional = gross -. fee in
-                let qty = net_notional /. candle.close in
+                let qty = updated_ls.trade_notional/. candle.close in
                 if qty <= 0.0 then
                   (Printf.eprintf "SKIP_ENTRY Long: qty %.8f rounds to zero \n%!" qty; ([], remaining_open_trades))
                 else if updated_ls.quote_balance < (qty *. candle.close) *. (1.0 +. fee_rate_one_side) then
@@ -380,18 +371,16 @@ module Vwap_strategy : S = struct
                      ((qty*. candle.close) *. (1.0 +. fee_rate_one_side)) updated_ls.quote_balance;
                    ([], remaining_open_trades))
                 else
-                  let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty ~price:candle.close Order.Buy in
+                  let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty ~price:candle.close Order.Buy
+                                |> List.map (fun o -> { o with Order.strategy_name = "vwap_pullback:entry" }) in
                   let new_trade = { entry_time = candle.timestamp; entry_price = candle.close; side = Long; qty = qty; bars_held = 0 } in
                   (orders, new_trade :: remaining_open_trades)
 
             | Some `Short when pullback (* && (candle.close < prev_candle.low) *) && vol_ok ->
               (* ENTRY Short: compute qty from trade_notional minus entry fee; sell that base qty *)
-              let gross = updated_ls.trade_notional in
-              let fee = gross *. fee_rate_one_side in
-              let net_notional = gross -. fee in
-              let qty = net_notional /. candle.close in
-              Printf.eprintf "ENTRY Short: gross=%.4f fee=%.6f net_notional=%.4f price=%.2f qty=%.8f\n%!" gross fee net_notional candle.close qty;
-              let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty ~price:candle.close Order.Sell in
+              let qty = updated_ls.trade_notional/. candle.close in
+              let orders = make_completed_order_for_side ~symbol:state.local_state.symbol ~qty ~price:candle.close Order.Sell
+                              |> List.map (fun o -> { o with Order.strategy_name = "vwap_pullback:entry" }) in
               let new_trade = { entry_time = candle.timestamp; entry_price = candle.close; side = Short; qty = qty; bars_held = 0 } in
               (orders, new_trade :: remaining_open_trades)
             | _ ->
@@ -403,8 +392,7 @@ module Vwap_strategy : S = struct
       (* assemble pending_orders (exit orders first, then entry orders) *)
       let pending_orders = exit_orders @ entry_orders @ state.pending_orders in
 
-      (* Apply fills (simulate trade execution & fees) by folding over all orders produced 
-         NOTE: No fee calculations here because we assumed the feeling when making completed orders. *)
+      (* Apply fills (simulate trade execution & fees) by folding over all orders produced *)
       let apply_fill_to_balances ls (order : Order.t) =
         (* If the order was created by make_completed_order, filled_quantity/fill price available *)
         let q = order.filled_quantity in
@@ -412,10 +400,12 @@ module Vwap_strategy : S = struct
         match order.side with
         | Order.Buy ->
           let cost = q *. p in
-          { ls with quote_balance = ls.quote_balance -. (cost); base_balance = ls.base_balance +. q }
+          let fee = cost *. fee_rate_one_side in
+          { ls with quote_balance = ls.quote_balance -. (cost +. fee); base_balance = ls.base_balance +. q }
         | Order.Sell ->
           let proceeds = q *. p in
-          { ls with base_balance = ls.base_balance -. q; quote_balance = ls.quote_balance +. (proceeds) }
+          let fee = proceeds *. fee_rate_one_side in
+          { ls with base_balance = ls.base_balance -. q; quote_balance = ls.quote_balance +. (proceeds -. fee) }
       in
 
       let all_fills = exit_orders @ entry_orders in

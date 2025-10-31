@@ -60,9 +60,9 @@ type pos = {
 
 let open_position_from_order (order : Order.t) : pos =
   let symbol = order.tradingsymbol in
+  let side = order.side in
   let qty = order.filled_quantity in
   let price = order.filled_price in (* since this represents the avg price that the quantity was filled at*)
-  let side = order.side in
   Printf.printf "Adding new position for symbol %s with price %f and qty %f \n%!" symbol price qty;
   {
     opened_at = Ptime_clock.now ();
@@ -79,7 +79,7 @@ let open_position_from_order (order : Order.t) : pos =
     net_price = price;
     value = (match side with | Buy -> qty *. price | Sell -> -.qty *. price);
     status = Open;
-    pnl = qty *. price; (* backtesting change *)
+    pnl = 0.0; 
     delta = 0.0;
     total_delta = 0.0;
     vega = 0.0;
@@ -98,7 +98,7 @@ let update_position_from_buy_order (pos : pos) (order : Order.t) : pos =
   let total_sell_cost = (pos.sell_qty *. pos.net_sell_price) in
   let new_buy_price = total_buy_cost /. (pos.buy_qty +. qty) in
   let net_price, value, pnl, status, closed_at =
-    if total_qty = 0.0 then
+    if pos.net_qty < 0.0 then
       (0.0, 0.0, -.(total_buy_cost +. total_sell_cost), Closed, Some now)
     else
       let net_price = (total_sell_cost +. total_buy_cost) /. total_qty in
@@ -146,7 +146,7 @@ let update_position_from_sell_order (pos : pos) (order : Order.t) : pos =
   let total_buy_cost = (pos.buy_qty *. pos.net_buy_price) in
   let new_sell_price =  total_sell_cost /. (pos.sell_qty -. qty) in
   let net_price, value, pnl, status, closed_at=
-    if total_qty = 0.0 then
+    if pos.net_qty > 0.0 then
       (0.0, 0.0, -.(total_buy_cost +. total_sell_cost), Closed, Some now)
     else
       let net_price = (total_sell_cost +. total_buy_cost) /. total_qty in
